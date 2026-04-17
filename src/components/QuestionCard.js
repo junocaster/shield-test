@@ -2,19 +2,34 @@ import React, { useState, useRef, useEffect } from 'react';
 import ProgressBar from './ProgressBar';
 
 /**
+ * Normalise a display label to snake_case so it can be matched
+ * against the DB's red_flags_present / safe_indicators_present arrays.
+ *
+ * Examples:
+ *   "Suspicious URL"  → "suspicious_url"
+ *   "Impersonation"   → "impersonation"
+ *   "Too Good To Be True" → "too_good_to_be_true"
+ */
+function toSnake(str) {
+  return (str || '').toLowerCase().replace(/\s+/g, '_');
+}
+
+/**
  * Compute accuracy metrics from the user's dropdown answers.
  *
  * Since every slot must be filled before CONFIRM:
  *   num_missed          = 0
  *   num_false_positives = total non-type slots - TP
  *   accuracy_score      = TP / total non-type slots
+ *
+ * Flag / indicator arrays are cross-referenced via toSnake() so that
+ * "Suspicious URL" (dropdown label) matches "suspicious_url" (DB value).
  */
 function computeAccuracy(parts, userAnswers, question) {
-  const nonTypeSlots = parts.filter(
+  const nonTypeSlots  = parts.filter(
     (p) => p.kind === 'dropdown' && p.slot !== 'type'
   );
-
-  const redFlags      = question.red_flags_present      || [];
+  const redFlags       = question.red_flags_present       || [];
   const safeIndicators = question.safe_indicators_present || [];
 
   let tp = 0, fp = 0;
@@ -29,12 +44,14 @@ function computeAccuracy(parts, userAnswers, question) {
 
     if (isCorrect) {
       tp++;
-      if (redFlags.includes(part.correct))       userFlagsIdentified.push(part.correct);
-      else if (safeIndicators.includes(part.correct)) userIndicatorsIdentified.push(part.correct);
+      const key = toSnake(part.correct);
+      if (redFlags.includes(key))            userFlagsIdentified.push(part.correct);
+      else if (safeIndicators.includes(key)) userIndicatorsIdentified.push(part.correct);
     } else {
       fp++;
-      if (redFlags.includes(userAnswer))          redFlagFalsePos.push(userAnswer);
-      else if (safeIndicators.includes(userAnswer)) indicatorFalsePos.push(userAnswer);
+      const key = toSnake(userAnswer);
+      if (redFlags.includes(key))            redFlagFalsePos.push(userAnswer);
+      else if (safeIndicators.includes(key)) indicatorFalsePos.push(userAnswer);
     }
   });
 
@@ -42,9 +59,9 @@ function computeAccuracy(parts, userAnswers, question) {
   const accuracyScore = total > 0 ? tp / total : 1.0;
 
   return {
-    numTruePositives:      tp,
-    numMissed:             0,
-    numFalsePositives:     fp,
+    numTruePositives: tp,
+    numMissed: 0,
+    numFalsePositives: fp,
     accuracyScore,
     userFlagsIdentified,
     userIndicatorsIdentified,
@@ -62,19 +79,16 @@ export default function QuestionCard({
 }) {
   const parts = question.question_format?.parts || [];
 
-  // Build initial answers map: { slot: '' } for each dropdown
   const initialAnswers = {};
   parts.forEach((p) => { if (p.kind === 'dropdown') initialAnswers[p.slot] = ''; });
 
   const [userAnswers, setUserAnswers] = useState(initialAnswers);
   const [confirmed,   setConfirmed]   = useState(false);
 
-  // Timing refs — reset when question changes via key prop
   const startedAt = useRef(new Date().toISOString());
   const startMs   = useRef(Date.now());
 
   useEffect(() => {
-    // Redundant when key={index} is used, but harmless safety net
     const fresh = {};
     parts.forEach((p) => { if (p.kind === 'dropdown') fresh[p.slot] = ''; });
     setUserAnswers(fresh);
@@ -94,8 +108,8 @@ export default function QuestionCard({
   function handleConfirm() {
     if (!allFilled || confirmed) return;
 
-    const submittedAt       = new Date().toISOString();
-    const responseTimeSecs  = (Date.now() - startMs.current) / 1000;
+    const submittedAt      = new Date().toISOString();
+    const responseTimeSecs = (Date.now() - startMs.current) / 1000;
 
     const userTypePrediction = (userAnswers['type'] || '').toLowerCase();
     const typeCorrect        = userTypePrediction === question.true_type;
@@ -107,23 +121,23 @@ export default function QuestionCard({
     } = computeAccuracy(parts, userAnswers, question);
 
     const payload = {
-      session_id:                sessionId,
-      question_id:               question.id,
-      question_number:           question.question_number,
-      interaction_num:           interactionNum,
-      started_at:                startedAt.current,
-      submitted_at:              submittedAt,
-      response_time_seconds:     responseTimeSecs,   // ← recorded here
-      user_type_prediction:      userTypePrediction,
-      type_correct:              typeCorrect,
-      user_flags_identified:     userFlagsIdentified,
+      session_id:                 sessionId,
+      question_id:                question.id,
+      question_number:            question.question_number,
+      interaction_num:            interactionNum,
+      started_at:                 startedAt.current,
+      submitted_at:               submittedAt,
+      response_time_seconds:      responseTimeSecs,
+      user_type_prediction:       userTypePrediction,
+      type_correct:               typeCorrect,
+      user_flags_identified:      userFlagsIdentified,
       user_indicators_identified: userIndicatorsIdentified,
-      red_flag_false_positives:  redFlagFalsePos,
-      safe_indicator_false_pos:  indicatorFalsePos,
-      accuracy_score:            accuracyScore,
-      num_true_positives:        numTruePositives,
-      num_missed:                numMissed,
-      num_false_positives:       numFalsePositives,
+      red_flag_false_positives:   redFlagFalsePos,
+      safe_indicator_false_pos:   indicatorFalsePos,
+      accuracy_score:             accuracyScore,
+      num_true_positives:         numTruePositives,
+      num_missed:                 numMissed,
+      num_false_positives:        numFalsePositives,
     };
 
     setConfirmed(true);
@@ -143,7 +157,6 @@ export default function QuestionCard({
       </div>
 
       <div className="question-body">
-        {/* SMS bubble — title intentionally hidden to avoid giving hints */}
         <div className="sms-wrapper">
           <div className="sms-header">
             <span className="sms-dot" />
@@ -154,7 +167,6 @@ export default function QuestionCard({
           </div>
         </div>
 
-        {/* Fill-in-the-blank */}
         <div className="fitb-section">
           <p className="fitb-instruction">Complete the sentence:</p>
           <div className="fitb-sentence">
