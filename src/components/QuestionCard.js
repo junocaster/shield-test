@@ -2,13 +2,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import ProgressBar from './ProgressBar';
 
 /**
- * Normalise a display label to snake_case so it can be matched
- * against the DB's red_flags_present / safe_indicators_present arrays.
- *
- * Examples:
- *   "Suspicious URL"  → "suspicious_url"
- *   "Impersonation"   → "impersonation"
- *   "Too Good To Be True" → "too_good_to_be_true"
+ * Normalise a display label to snake_case to match DB values.
+ * e.g. "Suspicious URL" → "suspicious_url"
  */
 function toSnake(str) {
   return (str || '').toLowerCase().replace(/\s+/g, '_');
@@ -17,20 +12,24 @@ function toSnake(str) {
 /**
  * Compute accuracy metrics from the user's dropdown answers.
  *
- * Since every slot must be filled before CONFIRM:
- *   num_missed          = 0
- *   num_false_positives = total non-type slots - TP
- *   accuracy_score      = TP / total non-type slots
+ * For each non-type slot:
+ *   CORRECT → increment TP; add to user_flags_identified or user_indicators_identified
+ *             based on whether the correct answer is a flag or indicator.
  *
- * Flag / indicator arrays are cross-referenced via toSnake() so that
- * "Suspicious URL" (dropdown label) matches "suspicious_url" (DB value).
+ *   WRONG   → increment FP; add the wrong answer to red_flag_false_positives or
+ *             safe_indicator_false_pos based on what the CORRECT answer should have
+ *             been (not what the user picked). This ensures any incorrect response
+ *             on a flag/indicator slot is captured.
+ *
+ * num_missed = 0 always (every slot must be filled before CONFIRM).
+ * accuracy_score = TP / total non-type slots.
  */
 function computeAccuracy(parts, userAnswers, question) {
-  const nonTypeSlots  = parts.filter(
+  const nonTypeSlots   = parts.filter(
     (p) => p.kind === 'dropdown' && p.slot !== 'type'
   );
-  const redFlags       = question.red_flags_present       || [];
-  const safeIndicators = question.safe_indicators_present || [];
+  const redFlags        = question.red_flags_present       || [];
+  const safeIndicators  = question.safe_indicators_present || [];
 
   let tp = 0, fp = 0;
   const userFlagsIdentified      = [];
@@ -39,23 +38,24 @@ function computeAccuracy(parts, userAnswers, question) {
   const indicatorFalsePos        = [];
 
   nonTypeSlots.forEach((part) => {
-    const userAnswer = userAnswers[part.slot];
-    const isCorrect  = userAnswer === part.correct;
+    const userAnswer  = userAnswers[part.slot];
+    const isCorrect   = userAnswer === part.correct;
+    const correctKey  = toSnake(part.correct);
 
     if (isCorrect) {
       tp++;
-      const key = toSnake(part.correct);
-      if (redFlags.includes(key))            userFlagsIdentified.push(part.correct);
-      else if (safeIndicators.includes(key)) userIndicatorsIdentified.push(part.correct);
+      if (redFlags.includes(correctKey))            userFlagsIdentified.push(part.correct);
+      else if (safeIndicators.includes(correctKey)) userIndicatorsIdentified.push(part.correct);
     } else {
       fp++;
-      const key = toSnake(userAnswer);
-      if (redFlags.includes(key))            redFlagFalsePos.push(userAnswer);
-      else if (safeIndicators.includes(key)) indicatorFalsePos.push(userAnswer);
+      // Key off the CORRECT answer's type — not the wrong answer —
+      // so any incorrect response on a flag/indicator slot is recorded.
+      if (redFlags.includes(correctKey))            redFlagFalsePos.push(userAnswer);
+      else if (safeIndicators.includes(correctKey)) indicatorFalsePos.push(userAnswer);
     }
   });
 
-  const total        = nonTypeSlots.length;
+  const total         = nonTypeSlots.length;
   const accuracyScore = total > 0 ? tp / total : 1.0;
 
   return {
